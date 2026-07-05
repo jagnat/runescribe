@@ -11,8 +11,10 @@ import rl "vendor:raylib"
 Vec2 :: [2]f32
 Mat :: matrix[3, 3]f32
 
-BEZIER_SEGMENTS :: 32
-ELLIPSE_SEGMENTS :: 64
+// Max deviation of flattened curves from the true curve, in canvas px
+FLATTEN_TOLERANCE :: f32(0.25)
+MIN_CIRCLE_SEGMENTS :: 12
+MAX_CIRCLE_SEGMENTS :: 2048
 DEFAULT_STROKE :: f32(1.5)
 
 Line :: struct {
@@ -169,6 +171,24 @@ apply :: proc(c: ^Canvas, p: Vec2) -> Vec2 {
 	return v.xy
 }
 
+// Largest stretch the current transform applies to any direction, estimated as
+// the longer column of the 2x2 part; exact under rotation and uniform scale
+xform_scale :: proc(c: ^Canvas) -> f32 {
+	sx := linalg.length(Vec2{c.xform[0, 0], c.xform[1, 0]})
+	sy := linalg.length(Vec2{c.xform[0, 1], c.xform[1, 1]})
+	return max(sx, sy)
+}
+
+// Segments for a full circle of canvas-space radius r so the sagitta of each
+// chord stays under FLATTEN_TOLERANCE
+circle_segments :: proc(r: f32) -> int {
+	if r <= FLATTEN_TOLERANCE * 2 {
+		return MIN_CIRCLE_SEGMENTS
+	}
+	n := int(math.ceil(math.PI / math.acos(1 - FLATTEN_TOLERANCE / r)))
+	return clamp(n, MIN_CIRCLE_SEGMENTS, MAX_CIRCLE_SEGMENTS)
+}
+
 // Shapes
 
 stroke_weight :: proc(c: ^Canvas, w: f32) {
@@ -185,6 +205,28 @@ record :: proc(c: ^Canvas, g: Geom) {
 }
 
 // Every primitive is a proc group: pass expanded coordinates or Vec2s
+
+LineIter :: struct {
+	p0, p1: Vec2,
+	total: f32,
+	next_t: f32,
+}
+
+make_line_iterator :: proc(p0, p1: Vec2, total: f32) -> LineIter {
+	return {p0, p1, total, 0}
+}
+
+iterate_line:: proc(iter: ^LineIter) -> (f32, Vec2, bool) {
+	t := iter.next_t
+
+	if t <= 1 {
+		iter.next_t = t + 1 / (iter.total - 1)
+		return t, {
+			math.lerp(iter.p0.x, iter.p1.x, t),
+			math.lerp(iter.p0.y, iter.p1.y, t)
+		}, true
+	} else do return 0, {}, false
+}
 
 line :: proc {
 	line_xy,
@@ -236,9 +278,10 @@ ellipse :: proc {
 }
 
 ellipse_v :: proc(c: ^Canvas, center: Vec2, rx, ry: f32) {
-	pts := make([]Vec2, ELLIPSE_SEGMENTS, context.temp_allocator)
-	for i in 0 ..< ELLIPSE_SEGMENTS {
-		t := f32(i) / ELLIPSE_SEGMENTS * math.TAU
+	n := circle_segments(max(rx, ry) * xform_scale(c))
+	pts := make([]Vec2, n, context.temp_allocator)
+	for i in 0 ..< n {
+		t := f32(i) / f32(n) * math.TAU
 		pts[i] = apply(c, center + {rx * math.cos(t), ry * math.sin(t)})
 	}
 	record(c, Polyline{pts, true})
@@ -257,7 +300,8 @@ arc :: proc {
 
 arc_v :: proc(c: ^Canvas, center: Vec2, r, start_angle, end_angle: f32) {
 	span := end_angle - start_angle
-	n := max(int(f32(ELLIPSE_SEGMENTS) * abs(span) / math.TAU), 1)
+	full := circle_segments(r * xform_scale(c))
+	n := max(int(math.ceil(f32(full) * abs(span) / math.TAU)), 1)
 	pts := make([]Vec2, n + 1, context.temp_allocator)
 	for i in 0 ..= n {
 		t := start_angle + span * f32(i) / f32(n)
@@ -298,9 +342,13 @@ bezier_v :: proc(c: ^Canvas, a, ctrl1, ctrl2, b: Vec2) {
 	p1 := apply(c, ctrl1)
 	p2 := apply(c, ctrl2)
 	p3 := apply(c, b)
-	pts := make([]Vec2, BEZIER_SEGMENTS + 1, context.temp_allocator)
-	for i in 0 ..= BEZIER_SEGMENTS {
-		t := f32(i) / BEZIER_SEGMENTS
+	// Uniform subdivision into n parts errs by at most 3*d/(4*n^2), where d is
+	// the largest second difference of the control points (Wang's bound)
+	d := max(linalg.length(p0 - 2 * p1 + p2), linalg.length(p1 - 2 * p2 + p3))
+	n := clamp(int(math.ceil(math.sqrt(3 * d / (4 * FLATTEN_TOLERANCE)))), 1, 1024)
+	pts := make([]Vec2, n + 1, context.temp_allocator)
+	for i in 0 ..= n {
+		t := f32(i) / f32(n)
 		u := 1 - t
 		pts[i] = u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3
 	}
@@ -309,6 +357,12 @@ bezier_v :: proc(c: ^Canvas, a, ctrl1, ctrl2, b: Vec2) {
 
 bezier_xy :: proc(c: ^Canvas, x1, y1, cx1, cy1, cx2, cy2, x2, y2: f32) {
 	bezier_v(c, {x1, y1}, {cx1, cy1}, {cx2, cy2}, {x2, y2})
+}
+
+BezierIter :: struct {
+	a, c1, c2, b: Vec2,
+	total: f32,
+	next_t: f32,
 }
 
 // Pen-down dots every gap units along the segment, endpoints included
@@ -378,7 +432,7 @@ render_shapes :: proc(c: ^Canvas) {
 			rl.DrawCircleV(s.a, half, color) // round caps, matching the SVG
 			rl.DrawCircleV(s.b, half, color)
 		case Circle:
-			rl.DrawRing(s.center, max(s.r - half, 0), s.r + half, 0, 360, 96, color)
+			rl.DrawRing(s.center, max(s.r - half, 0), s.r + half, 0, 360, i32(circle_segments(s.r + half)), color)
 		case Polyline:
 			for i in 0 ..< len(s.points) - 1 {
 				rl.DrawLineEx(s.points[i], s.points[i + 1], w, color)

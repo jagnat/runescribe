@@ -63,12 +63,13 @@ hatch_circle :: proc {
 }
 
 hatch_circle_v :: proc(c: ^Canvas, center: Vec2, r, spacing: f32, angle := f32(0)) {
-	pts: [ELLIPSE_SEGMENTS]Vec2
-	for i in 0 ..< ELLIPSE_SEGMENTS {
-		t := f32(i) / ELLIPSE_SEGMENTS * math.TAU
+	n := circle_segments(r * xform_scale(c))
+	pts := make([]Vec2, n, context.temp_allocator)
+	for i in 0 ..< n {
+		t := f32(i) / f32(n) * math.TAU
 		pts[i] = center + {r * math.cos(t), r * math.sin(t)}
 	}
-	hatch(c, pts[:], spacing, angle)
+	hatch(c, pts, spacing, angle)
 }
 
 hatch_circle_xy :: proc(c: ^Canvas, x, y, r, spacing: f32, angle := f32(0)) {
