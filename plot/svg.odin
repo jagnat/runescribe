@@ -2,15 +2,17 @@ package plot
 
 import "core:fmt"
 import "core:os"
+import "core:slice"
 import "core:strings"
 import "core:time"
 
 // Writes the current frame's shapes to svg/plot_<timestamp>.svg. Emits only
 // bare line/circle/polyline/polygon elements with coordinates already in
 // canvas space -- the subset svg2hpgl.py in ../hpgl_plot understands.
-// Shapes are grouped into one <g> per pen, tagged data-pen="n", so a converter
-// can plot pens separately without losing registration (single shared canvas).
-export_svg :: proc(c: ^Canvas) {
+// Shapes are grouped into one <g> per distinct (color, weight), carrying a hex
+// stroke and stroke-width; svg2hpgl assigns each group a carousel pen. Hex (not
+// a colour name) keeps the key stable through a vpype optimise pass.
+export_svg :: proc() {
 	os.make_directory("svg")
 	now := time.now()
 	year, month, day := time.date(now)
@@ -18,19 +20,29 @@ export_svg :: proc(c: ^Canvas) {
 	path := fmt.tprintf("svg/plot_%02d%02d%02d_%02d%02d%02d.svg",
 		year % 100, int(month), day, hour, minute, second)
 
+	Key :: struct {
+		color: Color,
+		weight: f32,
+	}
+
 	b := strings.builder_make(context.temp_allocator)
 	fmt.sbprintfln(&b, `<svg xmlns="http://www.w3.org/2000/svg" width="%.0f" height="%.0f" viewBox="0 0 %.0f %.0f">`,
-		c.width, c.height, c.width, c.height)
-	for pen_n in 1 ..= 8 {
-		opened := false
-		for shape in c.shapes {
-			if shape.pen != pen_n {
+		canvas.width, canvas.height, canvas.width, canvas.height)
+
+	// One <g> per distinct (color, weight), in first-appearance order.
+	seen := make([dynamic]Key, context.temp_allocator)
+	for shape in canvas.shapes {
+		key := Key{shape.color, shape.weight}
+		if slice.contains(seen[:], key) {
+			continue
+		}
+		append(&seen, key)
+
+		fmt.sbprintfln(&b, `<g fill="none" stroke="#%02x%02x%02x" stroke-width="%.2f" stroke-linecap="round" stroke-linejoin="round">`,
+			key.color.r, key.color.g, key.color.b, key.weight)
+		for shape in canvas.shapes {
+			if shape.color != key.color || shape.weight != key.weight {
 				continue
-			}
-			if !opened {
-				fmt.sbprintfln(&b, `<g data-pen="%d" fill="none" stroke="%s" stroke-linecap="round" stroke-linejoin="round">`,
-					pen_n, PEN_SVG_COLORS[pen_n])
-				opened = true
 			}
 			fmt.sbprintf(&b, `<`)
 			switch s in shape.geom {
@@ -45,17 +57,15 @@ export_svg :: proc(c: ^Canvas) {
 				}
 				fmt.sbprintf(&b, `"`)
 			}
-			fmt.sbprintfln(&b, ` stroke-width="%.2f"/>`, shape.weight)
+			fmt.sbprintfln(&b, `/>`)
 		}
-		if opened {
-			fmt.sbprintfln(&b, "</g>")
-		}
+		fmt.sbprintfln(&b, "</g>")
 	}
 
 	fmt.sbprintfln(&b, "</svg>")
 
 	if err := os.write_entire_file(path, strings.to_string(b)); err == nil {
-		fmt.printfln("Exported %s (%d shapes)", path, len(c.shapes))
+		fmt.printfln("Exported %s (%d shapes)", path, len(canvas.shapes))
 	} else {
 		fmt.eprintfln("Failed to write %s: %v", path, err)
 	}

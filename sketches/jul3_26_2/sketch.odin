@@ -39,13 +39,13 @@ main :: proc() {
 	p.run(800, 800, "template", draw, loop = false)
 }
 
-draw :: proc(c: ^p.Canvas) {
-	// w.point = {rand.float32() * c.width, rand.float32() * c.height}
+draw :: proc() {
+	// w.point = {rand.float32() * canvas.width, rand.float32() * canvas.height}
 	rand.reset(u64(time.now()._nsec))
 	w = {}
 	for i in 0..< ITERATIONS {
-		setup_walk(c, &w)
-		walk(c, &w, 0)
+		setup_walk(&w)
+		walk(&w, 0)
 	}
 }
 
@@ -53,9 +53,9 @@ MIN_ANGLE :: 30
 MAX_ANGLE :: 90
 angle_quadrants : []int : {0,1,2,3}
 
-setup_walk :: proc(c: ^p.Canvas, w: ^Walker) {
-	// w.point = {rand.float32() * (c.width - 200) + 100, rand.float32() * (c.height - 200) + 100}
-	w.point = {c.width / 2, c.height / 2}
+setup_walk :: proc(w: ^Walker) {
+	// w.point = {rand.float32() * (canvas.width - 200) + 100, rand.float32() * (canvas.height - 200) + 100}
+	w.point = {p.canvas.width / 2, p.canvas.height / 2}
 	for circle in w.banned_positions {
 		collide_dist := linalg.distance([2]f32{circle.x, circle.y}, w.point)
 		if collide_dist < circle.r do return
@@ -78,9 +78,9 @@ setup_walk :: proc(c: ^p.Canvas, w: ^Walker) {
 	w.shrink_factor = 0.978
 }
 
-walk :: proc(c: ^p.Canvas, w: ^Walker, depth: int) -> int {
+walk :: proc(w: ^Walker, depth: int) -> int {
 	p2 := w.point + {math.cos(w.current_angle / 180 * math.PI) * w.len, math.sin(w.current_angle / 180 * math.PI)* w.len}
-	//if p2.x > c.width || p2.y > c.height || p2.x < 0 || p2.y < 0 do return depth
+	//if p2.x > canvas.width || p2.y > canvas.height || p2.x < 0 || p2.y < 0 do return depth
 
 	p1 := w.point
 	w.len = w.len * w.shrink_factor
@@ -88,15 +88,15 @@ walk :: proc(c: ^p.Canvas, w: ^Walker, depth: int) -> int {
 	w.point = p2
 
 	if w.len >= 4 {
-		total_depth := walk(c, w, depth + 1)
+		total_depth := walk(w, depth + 1)
 		//if total_depth < 5 do return total_depth
 		jitter := w.len * 4
 		// p1 += {(rand.float32() - 0.5) * JITTER, (rand.float32() - 0.5) * JITTER}
 		p2 += {(rand.float32() - 0.5) * jitter, (rand.float32() - 0.5) * jitter}
-		// p.line(c, p1.x, p1.y, p2.x, p2.y)
+		// p.line(p1.x, p1.y, p2.x, p2.y)
 		p1 -= w.shift_factor
 		p2 -= w.shift_factor
-		dotted_line(c, p1, p2, 4, f32(total_depth - depth) / f32(total_depth) * 3)
+		dotted_line(p1, p2, 4, f32(total_depth - depth) / f32(total_depth) * 3)
 		return total_depth
 	}
 	else {
@@ -107,15 +107,15 @@ walk :: proc(c: ^p.Canvas, w: ^Walker, depth: int) -> int {
 		// 	if collide_dist < cir.r + other_c.r do return 0
 		// }
 		cir.r *= 0.8
-		w.shift_factor = w.point - {c.width / 2, c.height / 2}
+		w.shift_factor = w.point - {p.canvas.width / 2, p.canvas.height / 2}
 
 		// append(&w.banned_positions, cir)
-		// p.circle(c, cir.x, cir.y, cir.r)
+		// p.circle(cir.x, cir.y, cir.r)
 		return depth
 	}
 }
 
-dotted_line :: proc(c: ^p.Canvas, p1, p2: p.Vec2, gap: f32, num_jitter: f32) {
+dotted_line :: proc(p1, p2: p.Vec2, gap: f32, num_jitter: f32) {
 	num_jitter := num_jitter
 	d := linalg.distance(p1, p2)
 	step := int(d / gap)
@@ -132,7 +132,7 @@ dotted_line :: proc(c: ^p.Canvas, p1, p2: p.Vec2, gap: f32, num_jitter: f32) {
 			jitter_ang := rand.float32() * math.PI * 2
 			x += math.cos(jitter_ang) * jitter_rad
 			y += math.sin(jitter_ang) * jitter_rad
-			p.point(c, x, y)
+			p.point(x, y)
 		}
 	}
 }

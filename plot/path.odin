@@ -6,7 +6,7 @@ import "core:slice"
 // Pure polyline utilities: take points, return a fresh slice (never aliasing
 // the input) on the given allocator. The default matches the per-frame
 // lifetime of recorded shapes; scratch work stays on the temp allocator.
-// Draw results with polyline(c, pts)
+// Draw results with polyline(pts)
 
 // Chaikin corner cutting: each iteration replaces every segment with points
 // at 1/4 and 3/4, doubling density and rounding corners. Open polylines keep

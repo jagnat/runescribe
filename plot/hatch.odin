@@ -11,7 +11,7 @@ import "core:slice"
 // Fills a polygon with lines spaced `spacing` apart at `angle` radians.
 // Even-odd scanline, so concave outlines fill correctly. Points are in the
 // current transform's space, like every other primitive
-hatch :: proc(c: ^Canvas, points: []Vec2, spacing: f32, angle := f32(0)) {
+hatch :: proc(points: []Vec2, spacing: f32, angle := f32(0)) {
 	if len(points) < 3 || spacing <= 0 {
 		return
 	}
@@ -38,7 +38,7 @@ hatch :: proc(c: ^Canvas, points: []Vec2, spacing: f32, angle := f32(0)) {
 		}
 		slice.sort(xs[:])
 		for i := 0; i + 1 < len(xs); i += 2 {
-			line_v(c, {co * xs[i] - si * y, si * xs[i] + co * y}, {co * xs[i + 1] - si * y, si * xs[i + 1] + co * y})
+			line_v({co * xs[i] - si * y, si * xs[i] + co * y}, {co * xs[i + 1] - si * y, si * xs[i + 1] + co * y})
 		}
 	}
 }
@@ -48,13 +48,13 @@ hatch_rect :: proc {
 	hatch_rect_v,
 }
 
-hatch_rect_v :: proc(c: ^Canvas, pos, size: Vec2, spacing: f32, angle := f32(0)) {
+hatch_rect_v :: proc(pos, size: Vec2, spacing: f32, angle := f32(0)) {
 	pts := [4]Vec2{pos, pos + {size.x, 0}, pos + size, pos + {0, size.y}}
-	hatch(c, pts[:], spacing, angle)
+	hatch(pts[:], spacing, angle)
 }
 
-hatch_rect_xy :: proc(c: ^Canvas, x, y, w, h, spacing: f32, angle := f32(0)) {
-	hatch_rect_v(c, {x, y}, {w, h}, spacing, angle)
+hatch_rect_xy :: proc(x, y, w, h, spacing: f32, angle := f32(0)) {
+	hatch_rect_v({x, y}, {w, h}, spacing, angle)
 }
 
 hatch_circle :: proc {
@@ -62,16 +62,16 @@ hatch_circle :: proc {
 	hatch_circle_v,
 }
 
-hatch_circle_v :: proc(c: ^Canvas, center: Vec2, r, spacing: f32, angle := f32(0)) {
-	n := circle_segments(r * xform_scale(c))
+hatch_circle_v :: proc(center: Vec2, r, spacing: f32, angle := f32(0)) {
+	n := circle_segments(r * xform_scale())
 	pts := make([]Vec2, n, context.temp_allocator)
 	for i in 0 ..< n {
 		t := f32(i) / f32(n) * math.TAU
 		pts[i] = center + {r * math.cos(t), r * math.sin(t)}
 	}
-	hatch(c, pts, spacing, angle)
+	hatch(pts, spacing, angle)
 }
 
-hatch_circle_xy :: proc(c: ^Canvas, x, y, r, spacing: f32, angle := f32(0)) {
-	hatch_circle_v(c, {x, y}, r, spacing, angle)
+hatch_circle_xy :: proc(x, y, r, spacing: f32, angle := f32(0)) {
+	hatch_circle_v({x, y}, r, spacing, angle)
 }

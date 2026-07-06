@@ -13,20 +13,20 @@ noise :: proc {
 	noise_v,
 }
 
-noise_1d :: proc(c: ^Canvas, x: f32) -> f32 {
-	return noise_2d(c, x, 0)
+noise_1d :: proc(x: f32) -> f32 {
+	return noise_2d(x, 0)
 }
 
-noise_2d :: proc(c: ^Canvas, x, y: f32) -> f32 {
-	return simplex.noise_2d(i64(c.seed), {f64(x), f64(y)}) * 0.5 + 0.5
+noise_2d :: proc(x, y: f32) -> f32 {
+	return simplex.noise_2d(i64(canvas.seed), {f64(x), f64(y)}) * 0.5 + 0.5
 }
 
-noise_3d :: proc(c: ^Canvas, x, y, z: f32) -> f32 {
-	return simplex.noise_3d_improve_xy(i64(c.seed), {f64(x), f64(y), f64(z)}) * 0.5 + 0.5
+noise_3d :: proc(x, y, z: f32) -> f32 {
+	return simplex.noise_3d_improve_xy(i64(canvas.seed), {f64(x), f64(y), f64(z)}) * 0.5 + 0.5
 }
 
-noise_v :: proc(c: ^Canvas, p: Vec2) -> f32 {
-	return noise_2d(c, p.x, p.y)
+noise_v :: proc(p: Vec2) -> f32 {
+	return noise_2d(p.x, p.y)
 }
 
 // Fractal (octaved) noise, also in [0, 1). Each octave doubles frequency
@@ -36,11 +36,11 @@ fbm :: proc {
 	fbm_v,
 }
 
-fbm_xy :: proc(c: ^Canvas, x, y: f32, octaves := 4, lacunarity := f32(2), gain := f32(0.5)) -> f32 {
+fbm_xy :: proc(x, y: f32, octaves := 4, lacunarity := f32(2), gain := f32(0.5)) -> f32 {
 	sum, amp, norm := f32(0), f32(1), f32(0)
 	freq := f32(1)
 	for _ in 0 ..< octaves {
-		sum += amp * noise_2d(c, x * freq, y * freq)
+		sum += amp * noise_2d(x * freq, y * freq)
 		norm += amp
 		freq *= lacunarity
 		amp *= gain
@@ -48,6 +48,6 @@ fbm_xy :: proc(c: ^Canvas, x, y: f32, octaves := 4, lacunarity := f32(2), gain :
 	return sum / norm
 }
 
-fbm_v :: proc(c: ^Canvas, p: Vec2, octaves := 4, lacunarity := f32(2), gain := f32(0.5)) -> f32 {
-	return fbm_xy(c, p.x, p.y, octaves, lacunarity, gain)
+fbm_v :: proc(p: Vec2, octaves := 4, lacunarity := f32(2), gain := f32(0.5)) -> f32 {
+	return fbm_xy(p.x, p.y, octaves, lacunarity, gain)
 }

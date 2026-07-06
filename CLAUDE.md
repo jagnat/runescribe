@@ -19,9 +19,9 @@ Each frame the canvas is cleared, the sketch's `draw` re-records every shape, an
 
 ## SVG constraints (pen plotting)
 
-Exports are consumed by hpgl_plot's `svg2hpgl.py`, which only understands bare `line`, `polyline`, `polygon`, `rect`, `circle`, `ellipse`, and `path` elements, strokes only. Keep exports to those elements: flat structure (one `<g>` per pen, tagged `data-pen="n"`), no `transform` attributes, no `style`/CSS, no text, no fills, no gradients or clip paths. Transforms are baked into coordinates at record time (`apply`); curves are flattened to polylines at record time. Never emit geometry the plotter pipeline would have to interpret.
+Exports are consumed by hpgl_plot's `svg2hpgl.py`, which only understands bare `line`, `polyline`, `polygon`, `rect`, `circle`, `ellipse`, and `path` elements, strokes only. Keep exports to those elements: flat structure (one `<g>` per style, carrying a hex `stroke` and `stroke-width`), no `transform` attributes, no `style`/CSS, no text, no fills, no gradients or clip paths. Transforms are baked into coordinates at record time (`apply`); curves are flattened to polylines at record time. Never emit geometry the plotter pipeline would have to interpret.
 
-The plotter is an 8-pen carousel. All pens share one SVG (one `<g>` group per pen) rather than one file per pen, so the converter's fit-to-paper transform sees the whole drawing and per-pen passes stay registered.
+Sketches set an RGB `stroke` colour and `stroke_weight`, not a pen. Ink is grouped into one `<g>` per distinct (colour, weight) "style". Carousel-pen assignment is deferred to `svg2hpgl.py`, which maps each style to a pen (interactively, via `--pens`/`--map`, or a saved `<input>.pens.json` sidecar) and, if vpype is installed, runs `linemerge`/`linesort` first to cut pen-up travel. The plotter is an 8-pen carousel; all styles share one SVG so the converter's fit-to-paper transform sees the whole drawing and per-pen passes stay registered.
 
 ## Memory & lifetimes
 
