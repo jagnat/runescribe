@@ -3,14 +3,11 @@ package plot
 import "core:math"
 import "core:slice"
 
-// Pen-plotter fills: shapes are filled with parallel pen lines, recorded as
-// ordinary Line shapes on the current pen. Hatching draws no outline; call
-// rect/circle/polyline alongside if you want one. Cross-hatch by hatching
+// Fills, drawn as parallel Line shapes on the current pen. No outline is drawn;
+// call rect/circle/polyline alongside if you want one. Cross-hatch by hatching
 // twice at two angles.
 
-// Fills a polygon with lines spaced `spacing` apart at `angle` radians.
-// Even-odd scanline, so concave outlines fill correctly. Points are in the
-// current transform's space, like every other primitive
+// Even-odd scanline, so concave outlines fill correctly. angle is in radians
 hatch :: proc(points: []Vec2, spacing: f32, angle := f32(0)) {
 	if len(points) < 3 || spacing <= 0 {
 		return
@@ -63,13 +60,7 @@ hatch_circle :: proc {
 }
 
 hatch_circle_v :: proc(center: Vec2, r, spacing: f32, angle := f32(0)) {
-	n := circle_segments(r * xform_scale())
-	pts := make([]Vec2, n, context.temp_allocator)
-	for i in 0 ..< n {
-		t := f32(i) / f32(n) * math.TAU
-		pts[i] = center + {r * math.cos(t), r * math.sin(t)}
-	}
-	hatch(pts, spacing, angle)
+	hatch(ellipse_points(center, r, r, circle_segments(r * xform_scale())), spacing, angle)
 }
 
 hatch_circle_xy :: proc(x, y, r, spacing: f32, angle := f32(0)) {

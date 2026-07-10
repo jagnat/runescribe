@@ -6,12 +6,10 @@ import "core:slice"
 import "core:strings"
 import "core:time"
 
-// Writes the current frame's shapes to svg/plot_<timestamp>.svg. Emits only
-// bare line/circle/polyline/polygon elements with coordinates already in
-// canvas space -- the subset svg2hpgl.py in ../hpgl_plot understands.
-// Shapes are grouped into one <g> per distinct (color, weight), carrying a hex
-// stroke and stroke-width; svg2hpgl assigns each group a carousel pen. Hex (not
-// a colour name) keeps the key stable through a vpype optimise pass.
+// Writes the frame to svg/plot_<timestamp>.svg, using only the bare
+// line/circle/polyline/polygon subset svg2hpgl.py understands. One <g> per
+// distinct (color, weight), which svg2hpgl maps to a carousel pen. Hex rather
+// than a colour name keeps that key stable through a vpype optimise pass.
 export_svg :: proc() {
 	os.make_directory("svg")
 	now := time.now()
@@ -29,15 +27,15 @@ export_svg :: proc() {
 	fmt.sbprintfln(&b, `<svg xmlns="http://www.w3.org/2000/svg" width="%.0f" height="%.0f" viewBox="0 0 %.0f %.0f">`,
 		canvas.width, canvas.height, canvas.width, canvas.height)
 
-	// One <g> per distinct (color, weight), in first-appearance order.
-	seen := make([dynamic]Key, context.temp_allocator)
+	styles := make([dynamic]Key, context.temp_allocator)
 	for shape in canvas.shapes {
 		key := Key{shape.color, shape.weight}
-		if slice.contains(seen[:], key) {
-			continue
+		if !slice.contains(styles[:], key) {
+			append(&styles, key)
 		}
-		append(&seen, key)
+	}
 
+	for key in styles {
 		fmt.sbprintfln(&b, `<g fill="none" stroke="#%02x%02x%02x" stroke-width="%.2f" stroke-linecap="round" stroke-linejoin="round">`,
 			key.color.r, key.color.g, key.color.b, key.weight)
 		for shape in canvas.shapes {
@@ -51,7 +49,7 @@ export_svg :: proc() {
 			case Circle:
 				fmt.sbprintf(&b, `circle cx="%.2f" cy="%.2f" r="%.2f"`, s.center.x, s.center.y, s.r)
 			case Polyline:
-				fmt.sbprintf(&b, s.closed ? `polygon points="` : `polyline points="`)
+				fmt.sbprintf(&b, `%s points="`, s.closed ? "polygon" : "polyline")
 				for p, i in s.points {
 					fmt.sbprintf(&b, "%s%.2f,%.2f", i > 0 ? " " : "", p.x, p.y)
 				}

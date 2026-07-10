@@ -1,3 +1,10 @@
 build/
 svg/
+hpgl/
 .DS_Store
+*.sublime-workspace
+*.exe
+*.out
+*.pdb
+*.rdi
+

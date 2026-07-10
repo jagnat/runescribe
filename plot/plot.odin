@@ -67,17 +67,14 @@ Canvas :: struct {
 	xform_stack: [dynamic]Mat,
 	verts: [dynamic]Vec2,
 	clips: [dynamic]Clip,
+	group: ^Group, // capture target while a group is open
 }
 
-// The single canvas. Sketches read width/height/seed off it and the whole
-// package records against it, so no proc needs a canvas argument.
 canvas: Canvas
 
-// Opens the preview window and calls draw_proc once per frame. The canvas is
-// cleared before every call, so draw_proc re-records the whole frame each time.
-// With loop = false, draw_proc runs once and the recorded shapes are re-rendered
-// until R rerolls the seed and triggers a redraw.
-// Keys: S exports the current frame as SVG, R rerolls the random seed.
+// Calls draw_proc once per frame, re-recording the whole canvas each time.
+// With loop = false it draws once and re-renders until R reseeds.
+// Keys: S exports SVG, R rerolls the seed
 run :: proc(width, height: int, title: string, draw_proc: proc(), loop := true) {
 	rl.SetConfigFlags({.WINDOW_HIGHDPI, .MSAA_4X_HINT})
 	rl.InitWindow(i32(width), i32(height), fmt.ctprintf("%s | S: save svg, R: reseed", title))
@@ -98,11 +95,11 @@ run :: proc(width, height: int, title: string, draw_proc: proc(), loop := true) 
 		}
 
 		if loop || needs_draw {
-			// Recorded shapes live on the temp allocator, so it is only safe
-			// to free once we are about to re-record the frame
+			// Recorded shapes are temp-allocated: only safe to free right
+			// before re-recording
 			free_all(context.temp_allocator)
 			canvas_reset()
-			rand.reset(canvas.seed) // deterministic per frame, so the preview holds still until reseeded
+			rand.reset(canvas.seed) // hold still until reseeded
 			draw_proc()
 			needs_draw = false
 		}
@@ -119,13 +116,13 @@ run :: proc(width, height: int, title: string, draw_proc: proc(), loop := true) 
 	}
 }
 
-// Clears all recording state onto a fresh temp-allocator frame. run calls this
-// every frame; call it yourself if driving the canvas without a window
+// Call this yourself only when driving the canvas without a window
 canvas_reset :: proc() {
 	canvas.shapes = make([dynamic]Shape, context.temp_allocator)
 	canvas.xform_stack = make([dynamic]Mat, context.temp_allocator)
 	canvas.verts = make([dynamic]Vec2, context.temp_allocator)
 	canvas.clips = make([dynamic]Clip, context.temp_allocator)
+	canvas.group = nil
 	canvas.xform = 1
 	canvas.weight = DEFAULT_WEIGHT
 	canvas.color = DEFAULT_COLOR
@@ -156,15 +153,19 @@ scale :: proc(sx: f32, sy := f32(0)) {
 	canvas.xform *= Mat{sx, 0, 0, 0, sy, 0, 0, 0, 1}
 }
 
-// Bakes the current transform into a point. Every shape proc routes its
-// coordinates through this, so recorded shapes are always in canvas space.
+// shx shifts x in proportion to y, shy shifts y in proportion to x
+shear :: proc(shx, shy: f32) {
+	canvas.xform *= Mat{1, shx, 0, shy, 1, 0, 0, 0, 1}
+}
+
+// Bakes the current transform into a point, so recorded shapes are in canvas space
 apply :: proc(p: Vec2) -> Vec2 {
 	v := canvas.xform * [3]f32{p.x, p.y, 1}
 	return v.xy
 }
 
-// Largest stretch the current transform applies to any direction, estimated as
-// the longer column of the 2x2 part; exact under rotation and uniform scale
+// Largest stretch the transform applies to any direction; exact under rotation
+// and uniform scale
 xform_scale :: proc() -> f32 {
 	sx := linalg.length(Vec2{canvas.xform[0, 0], canvas.xform[1, 0]})
 	sy := linalg.length(Vec2{canvas.xform[0, 1], canvas.xform[1, 1]})
@@ -181,14 +182,24 @@ circle_segments :: proc(r: f32) -> int {
 	return clamp(n, MIN_CIRCLE_SEGMENTS, MAX_CIRCLE_SEGMENTS)
 }
 
+// Flattened outline, untransformed; callers apply()
+@(private)
+ellipse_points :: proc(center: Vec2, rx, ry: f32, n: int) -> []Vec2 {
+	pts := make([]Vec2, n, context.temp_allocator)
+	for i in 0 ..< n {
+		t := f32(i) / f32(n) * math.TAU
+		pts[i] = center + {rx * math.cos(t), ry * math.sin(t)}
+	}
+	return pts
+}
+
 // Shapes
 
 stroke_weight :: proc(w: f32) {
 	canvas.weight = w
 }
 
-// Sets the stroke color for subsequent shapes. Carousel pen assignment happens
-// later in svg2hpgl, keyed on (color, weight).
+// svg2hpgl assigns pens later, keyed on (color, weight)
 stroke :: proc {
 	stroke_gray,
 	stroke_rgb,
@@ -208,34 +219,34 @@ stroke_color :: proc(col: Color) {
 }
 
 record :: proc(g: Geom) {
+	if canvas.group != nil {
+		append(&canvas.group.ops, Shape{g, canvas.color, canvas.weight})
+		return
+	}
 	if len(canvas.clips) > 0 && record_clipped(g) {
 		return
 	}
 	append(&canvas.shapes, Shape{g, canvas.color, canvas.weight})
 }
 
-// Every primitive is a proc group: pass expanded coordinates or Vec2s
-
+// Yields steps points from p0 to p1, both endpoints included
 LineIter :: struct {
 	p0, p1: Vec2,
-	total: f32,
-	next_t: f32,
+	steps: int,
+	i: int,
 }
 
-make_line_iterator :: proc(p0, p1: Vec2, total: f32) -> LineIter {
-	return {p0, p1, total, 0}
+make_line_iterator :: proc(p0, p1: Vec2, steps: int) -> LineIter {
+	return {p0, p1, steps, 0}
 }
 
-iterate_line:: proc(iter: ^LineIter) -> (f32, Vec2, bool) {
-	t := iter.next_t
-
-	if t <= 1 {
-		iter.next_t = t + 1 / (iter.total - 1)
-		return t, {
-			math.lerp(iter.p0.x, iter.p1.x, t),
-			math.lerp(iter.p0.y, iter.p1.y, t)
-		}, true
-	} else do return 0, {}, false
+iterate_line :: proc(iter: ^LineIter) -> (t: f32, p: Vec2, ok: bool) {
+	if iter.i >= iter.steps {
+		return
+	}
+	t = iter.steps > 1 ? f32(iter.i) / f32(iter.steps - 1) : 0
+	iter.i += 1
+	return t, iter.p0 + (iter.p1 - iter.p0) * t, true
 }
 
 line :: proc {
@@ -251,7 +262,7 @@ line_xy :: proc(x1, y1, x2, y2: f32) {
 	line_v({x1, y1}, {x2, y2})
 }
 
-// A pen dot: exported as a zero-length line, which svg2hpgl turns into a pen-down dot
+// Zero-length line; svg2hpgl plots it as a pen-down dot
 point :: proc {
 	point_xy,
 	point_v,
@@ -266,33 +277,31 @@ point_xy :: proc(x, y: f32) {
 	point_v({x, y})
 }
 
-// Radius follows uniform scale (sqrt of the transform determinant); use ellipse under nonuniform scale
+// Radius follows uniform scale only; use ellipse under nonuniform scale
 circle :: proc {
 	circle_xy,
 	circle_v,
 }
 
 circle_v :: proc(center: Vec2, r: f32) {
-	s := math.sqrt(abs(canvas.xform[0, 0] * canvas.xform[1, 1] - canvas.xform[0, 1] * canvas.xform[1, 0]))
-	record(Circle{apply(center), r * s})
+	det := canvas.xform[0, 0] * canvas.xform[1, 1] - canvas.xform[0, 1] * canvas.xform[1, 0]
+	record(Circle{apply(center), r * math.sqrt(abs(det))})
 }
 
 circle_xy :: proc(x, y, r: f32) {
 	circle_v({x, y}, r)
 }
 
-// Flattened to a closed polyline so arbitrary transforms (rotation, shear) stay correct
+// Flattened, so rotation and shear stay correct
 ellipse :: proc {
 	ellipse_xy,
 	ellipse_v,
 }
 
 ellipse_v :: proc(center: Vec2, rx, ry: f32) {
-	n := circle_segments(max(rx, ry) * xform_scale())
-	pts := make([]Vec2, n, context.temp_allocator)
-	for i in 0 ..< n {
-		t := f32(i) / f32(n) * math.TAU
-		pts[i] = apply(center + {rx * math.cos(t), ry * math.sin(t)})
+	pts := ellipse_points(center, rx, ry, circle_segments(max(rx, ry) * xform_scale()))
+	for &p in pts {
+		p = apply(p)
 	}
 	record(Polyline{pts, true})
 }
@@ -301,8 +310,7 @@ ellipse_xy :: proc(x, y, rx, ry: f32) {
 	ellipse_v({x, y}, rx, ry)
 }
 
-// Circular arc from start_angle to end_angle in radians, flattened to an open
-// polyline; sweeps backwards when end_angle < start_angle
+// Angles in radians; sweeps backwards when end_angle < start_angle
 arc :: proc {
 	arc_xy,
 	arc_v,
@@ -369,10 +377,26 @@ bezier_xy :: proc(x1, y1, cx1, cy1, cx2, cy2, x2, y2: f32) {
 	bezier_v({x1, y1}, {cx1, cy1}, {cx2, cy2}, {x2, y2})
 }
 
+// Yields steps points along the curve, both endpoints included
 BezierIter :: struct {
 	a, c1, c2, b: Vec2,
-	total: f32,
-	next_t: f32,
+	steps: int,
+	i: int,
+}
+
+make_bezier_iterator :: proc(a, c1, c2, b: Vec2, steps: int) -> BezierIter {
+	return {a, c1, c2, b, steps, 0}
+}
+
+iterate_bezier :: proc(iter: ^BezierIter) -> (t: f32, p: Vec2, ok: bool) {
+	if iter.i >= iter.steps {
+		return
+	}
+	t = iter.steps > 1 ? f32(iter.i) / f32(iter.steps - 1) : 0
+	iter.i += 1
+	u := 1 - t
+	p = u * u * u * iter.a + 3 * u * u * t * iter.c1 + 3 * u * t * t * iter.c2 + t * t * t * iter.b
+	return t, p, true
 }
 
 // Pen-down dots every gap units along the segment, endpoints included
@@ -392,8 +416,7 @@ dotted_line_xy :: proc(x1, y1, x2, y2, gap: f32) {
 	dotted_line_v({x1, y1}, {x2, y2}, gap)
 }
 
-// Records a caller-built point list (e.g. from smooth or simplify) as one
-// polyline; the points are copied, so any allocation may back the input
+// Points are copied, so the input can live on any allocator
 polyline :: proc(points: []Vec2, closed := false) {
 	if len(points) < 2 {
 		return

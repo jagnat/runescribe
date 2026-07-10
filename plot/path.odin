@@ -3,14 +3,10 @@ package plot
 import "core:math/linalg"
 import "core:slice"
 
-// Pure polyline utilities: take points, return a fresh slice (never aliasing
-// the input) on the given allocator. The default matches the per-frame
-// lifetime of recorded shapes; scratch work stays on the temp allocator.
-// Draw results with polyline(pts)
+// Each proc returns a fresh slice, never aliasing the input. Draw the result
+// with polyline(pts)
 
-// Chaikin corner cutting: each iteration replaces every segment with points
-// at 1/4 and 3/4, doubling density and rounding corners. Open polylines keep
-// their endpoints; closed ones wrap
+// Chaikin corner cutting. Open polylines keep their endpoints; closed ones wrap
 smooth :: proc(points: []Vec2, iterations := 1, closed := false, allocator := context.temp_allocator) -> []Vec2 {
 	pts := points
 	for _ in 0 ..< iterations {
@@ -39,8 +35,7 @@ smooth :: proc(points: []Vec2, iterations := 1, closed := false, allocator := co
 }
 
 // Ramer-Douglas-Peucker: drops points that deviate less than tolerance from
-// the line between their kept neighbors. Fewer points means smaller SVGs and
-// faster plots
+// the line between their kept neighbors
 simplify :: proc(points: []Vec2, tolerance: f32, allocator := context.temp_allocator) -> []Vec2 {
 	if len(points) < 3 {
 		return slice.clone(points, allocator)

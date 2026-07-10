@@ -55,7 +55,7 @@ draw :: proc() {
 			plot.stroke(plot.BLACK)
 		}
 
-		plot.occlude(sil)
+		plot.push_occlude(sil)
 	}
 
 	// the sun sits behind every ridge and survives only in the gaps
