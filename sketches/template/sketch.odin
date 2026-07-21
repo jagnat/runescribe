@@ -14,5 +14,6 @@ main :: proc() {
 draw :: proc() {
 	using p;
 
-	p.circle(canvas.width / 2, canvas.height / 2, 200)
+	r := p.param("radius", 200, 10, 290)
+	p.circle(canvas.width / 2, canvas.height / 2, r)
 }

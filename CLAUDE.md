@@ -8,12 +8,13 @@ plot_odin is a Processing-style sketching framework in Odin: sketches record sha
 
 - `odin run sketches/<name> -out:build/<name>` — build and run a sketch
 - `odin check sketches/<name>` — typecheck a sketch (and the `plot` package it imports)
-- In the preview window: `S` exports `svg/plot_<timestamp>.svg`, `R` rerolls the random seed
+- In the preview window: `S` exports `svg/plot_<timestamp>.svg`, `R` rerolls the random seed, `Tab` toggles the tweak panel (`param`/`param_int`/`toggle` declared in `draw`)
 
 ## Architecture
 
 - `plot/` — the framework package: canvas, transforms, shape recording, and raylib preview in `plot.odin`; SVG export in `svg.odin`. Imports only core and `vendor:raylib`.
 - `sketches/<name>/` — one package per sketch. Each imports `plot` by relative path, defines a `draw` proc, and calls `plot.run` from `main`. Copy `sketches/template/` to start a new one.
+- Text: `text(str, x, y, size)` in `plot/text.odin` draws single-line glyphs from `plot/font_maple.odin` (generated from Maple Mono Thin by `tools/singleline_font/`, ASCII only; each stroke is one polyline, so one pen-down per stroke). `text_width` measures; `FONT_*` constants give metrics as fractions of size.
 
 Each frame the canvas is cleared, the sketch's `draw` re-records every shape, and the same recorded shapes feed both the raylib preview and the SVG export — the exported SVG is exactly the previewed frame. The random seed is reset before each `draw`, so sketches are deterministic until reseeded.
 

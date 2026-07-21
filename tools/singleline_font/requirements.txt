@@ -1,0 +1,6 @@
+fonttools
+freetype-py
+numpy
+pillow
+scikit-image
+scipy

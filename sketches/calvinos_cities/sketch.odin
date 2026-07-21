@@ -2,10 +2,6 @@ package sketch
 
 import p "../../plot"
 import "core:math"
-import "core:math/linalg"
-import "core:math/rand"
-import "core:os"
-import "core:strconv"
 
 Vec2 :: p.Vec2
 Vec3 :: [3]f32
@@ -17,13 +13,46 @@ SCALE :: 24 // pixels per unit cell
 
 XY_GRID_SIZE :: 16
 Z_GRID_SIZE :: 16
+MAX_SUM :: 2 * (XY_GRID_SIZE - 1) + Z_GRID_SIZE - 1
 
-Voxel :: struct {
-	filled: bool,
+win: Vec2
+origin: Vec2
+scene: [XY_GRID_SIZE][XY_GRID_SIZE][Z_GRID_SIZE]bool
+
+to_screen :: proc(c: Vec3) -> Vec2 {
+	return {origin.x + (c.x - c.y) * COS30 * SCALE,
+		origin.y + (c.x + c.y) * SIN30 * SCALE - c.z * SCALE}
 }
 
-Scene :: struct {
-	tiles: [XY_GRID_SIZE][XY_GRID_SIZE][Z_GRID_SIZE]Voxel,
+v3 :: proc(c: Vec3i) -> Vec3 {
+	return {f32(c.x), f32(c.y), f32(c.z)}
+}
+
+set_filled :: proc { set_filled_1, set_filled_3 }
+set_filled_1 :: proc(c: Vec3i, filled: bool = true) {
+	set_filled_3(c.x, c.y, c.z, filled)
+}
+set_filled_3 :: proc(x, y, z: int, filled: bool = true) {
+	scene[x][y][z] = filled
+}
+
+is_filled :: proc { is_filled_1, is_filled_3 }
+is_filled_1 :: proc(c: Vec3i) -> bool {
+	return is_filled_3(c.x, c.y, c.z)
+}
+is_filled_3 :: proc(x, y, z: int) -> bool {
+	if x < 0 || x >= XY_GRID_SIZE || y < 0 || y >= XY_GRID_SIZE || z < 0 || z >= Z_GRID_SIZE do return false
+	return scene[x][y][z]
+}
+
+fill_voxels :: proc(x0, y0, z0, x1, y1, z1: int, filled := true) {
+	for x in x0 ..< x1 {
+		for y in y0 ..< y1 {
+			for z in z0 ..< z1 {
+				set_filled(x, y, z, filled)
+			}
+		}
+	}
 }
 
 // Used for sketching on faces of voxels
@@ -69,73 +98,18 @@ face_matrix :: proc(f: Face) -> p.Mat {
 	}
 }
 
-win: Vec2
-origin: Vec2
-scene: Scene
-
-to_screen :: proc(c: Vec3) -> Vec2 {
-	return {origin.x + (c.x - c.y) * COS30 * SCALE,
-		origin.y + (c.x + c.y) * SIN30 * SCALE - c.z * SCALE}
+// A decoration bound to wall cells: painted in each touched cell's depth
+// slot, clipped to that cell's face quad
+Decal :: struct {
+	tile: Vec3i,
+	dir: FaceDir,
+	lo, hi: Vec2,
+	paint: proc(f: Face, lo, hi: Vec2),
 }
 
-set_filled :: proc { set_filled_1, set_filled_3 }
-set_filled_1 :: proc(c: Vec3i, filled: bool = true) {
-	set_filled_3(c.x, c.y, c.z, filled)
-}
-set_filled_3 :: proc(x, y, z: int, filled: bool = true) {
-	scene.tiles[x][y][z].filled = filled
-}
+decals: [dynamic]Decal
 
-is_filled :: proc { is_filled_1, is_filled_3 }
-is_filled_1 :: proc(c: Vec3i) -> bool {
-	return is_filled_3(c.x, c.y, c.z)
-}
-is_filled_3 :: proc(x, y, z: int) -> bool {
-	if x < 0 || x >= XY_GRID_SIZE || y < 0 || y >= XY_GRID_SIZE || z < 0 || z >= Z_GRID_SIZE do return false
-	return scene.tiles[x][y][z].filled
-}
-
-fill_voxels :: proc(x0, y0, z0, x1, y1, z1: int, filled := true) {
-	for x in x0 ..< x1 {
-		for y in y0 ..< y1 {
-			for z in z0 ..< z1 {
-				set_filled(x, y, z, filled)
-			}
-		}
-	}
-}
-
-DrawGroup :: struct {
-	group: ^p.Group,
-	lo, hi: Vec3,
-}
-
-groups: [dynamic]DrawGroup
-current_group: DrawGroup
-
-begin_group :: proc() {
-	p.begin_group()
-	current_group.lo = {max(f32), max(f32), max(f32)}
-	current_group.hi = {min(f32), min(f32), min(f32)}
-}
-
-end_group :: proc() {
-	current_group.group = p.end_group()
-	append(&groups, current_group)
-}
-
-expand_group :: proc(w: Vec3) {
-	current_group.lo = linalg.min(current_group.lo, w)
-	current_group.hi = linalg.max(current_group.hi, w)
-}
-
-ogee :: proc(f: Face, lo := Vec2{0, 0}, hi := Vec2{1, 1}) {
-	begin_group()
-	expand_group(face_world(f, {lo.x, lo.y}))
-	expand_group(face_world(f, {hi.x, lo.y}))
-	expand_group(face_world(f, {lo.x, hi.y}))
-	expand_group(face_world(f, {hi.x, hi.y}))
-
+ogee :: proc(f: Face, lo, hi: Vec2) {
 	p.push_matrix()
 	p.canvas.xform = face_matrix(f)
 
@@ -175,7 +149,6 @@ ogee :: proc(f: Face, lo := Vec2{0, 0}, hi := Vec2{1, 1}) {
 		xc, y0 + control_dist, xc, y0)
 
 	p.pop_matrix()
-	end_group()
 }
 
 FRAME_BEZIER_STEPS :: 48
@@ -245,321 +218,104 @@ frame_ogee :: proc() {
 	p.push_clip(left[:])
 }
 
-line3 :: proc(a, b: Vec3) {
-	expand_group(a)
-	expand_group(b)
-	p.line(to_screen(a), to_screen(b))
-}
+// Along the (1,1,1) view ray the projection is invariant, so x+y+z descending
+// is an exact painter's order: a voxel can only occlude strictly smaller sums
 
-poly3 :: proc(pts: []Vec3, closed := false) {
-	scr := make([]Vec2, len(pts), context.temp_allocator)
-	for w, i in pts {
-		scr[i] = to_screen(w)
-		expand_group(w)
+// Fully hidden iff a voxel up the view ray projects to the same hexagon
+hidden :: proc(c: Vec3i) -> bool {
+	for t in 1 ..< max(XY_GRID_SIZE, Z_GRID_SIZE) {
+		if is_filled(c + t) do return true
 	}
-	p.polyline(scr, closed)
+	return false
 }
 
-occlude3 :: proc(pts: []Vec3) {
-	scr := make([]Vec2, len(pts), context.temp_allocator)
-	for w, i in pts {
-		scr[i] = to_screen(w)
-		expand_group(w)
+push_hexagon :: proc(c: Vec3i) {
+	v := v3(c)
+	pts := [6]Vec2{
+		to_screen(v + {0, 0, 1}),
+		to_screen(v + {1, 0, 1}),
+		to_screen(v + {1, 0, 0}),
+		to_screen(v + {1, 1, 0}),
+		to_screen(v + {0, 1, 0}),
+		to_screen(v + {0, 1, 1}),
 	}
-	p.push_occlude(scr)
+	p.push_occlude(pts[:])
 }
 
-screen_bounds :: proc(e: ^DrawGroup) -> (lo, hi: Vec2) {
-	lo = {max(f32), max(f32)}
-	hi = {min(f32), min(f32)}
-	// test all 8 corners
-	for i in 0 ..< 8 {
-		c := Vec3{
-			i & 1 == 0 ? e.lo.x : e.hi.x,
-			i & 2 == 0 ? e.lo.y : e.hi.y,
-			i & 4 == 0 ? e.lo.z : e.hi.z,
-		}
-		s := to_screen(c)
-		lo = linalg.min(lo, s)
-		hi = linalg.max(hi, s)
-	}
-	return
-}
-
-in_front :: proc(a, b: ^DrawGroup) -> (front, known: bool) {
-	EPS :: f32(0.001)
-	alo, ahi := screen_bounds(a)
-	blo, bhi := screen_bounds(b)
-	if ahi.x < blo.x || bhi.x < alo.x || ahi.y < blo.y || bhi.y < alo.y {
-		return false, false
-	}
-	if a.lo.z >= b.hi.z - EPS do return true, true
-	if b.lo.z >= a.hi.z - EPS do return false, true
-	if a.lo.x >= b.hi.x - EPS do return true, true
-	if b.lo.x >= a.hi.x - EPS do return false, true
-	if a.lo.y >= b.hi.y - EPS do return true, true
-	if b.lo.y >= a.hi.y - EPS do return false, true
-	return false, false
-}
-
-depth_key :: proc(e: ^DrawGroup) -> f32 {
-	c := (e.lo + e.hi) / 2
-	return c.x + c.y + c.z
-}
-
-order_groups :: proc(es: []DrawGroup) -> []int {
-	n := len(es)
-	out := make([]int, n, context.temp_allocator)
-	used := make([]bool, n, context.temp_allocator)
-	for k in 0 ..< n {
-		best := -1
-		best_key := min(f32)
-		for i in 0 ..< n {
-			if used[i] do continue
-			blocked := false
-			for j in 0 ..< n {
-				if j == i || used[j] do continue
-				if front, known := in_front(&es[j], &es[i]); known && front {
-					blocked = true
-					break
-				}
-			}
-			if !blocked && depth_key(&es[i]) > best_key {
-				best = i
-				best_key = depth_key(&es[i])
+emit_decals :: proc(level: int) {
+	for d in decals {
+		du := d.dir == .PosX ? Vec3i{0, 1, 0} : Vec3i{1, 0, 0}
+		n := d.dir == .PosX ? Vec3i{1, 0, 0} : Vec3i{0, 1, 0}
+		for i in int(math.floor(d.lo.x)) ..< int(math.ceil(d.hi.x)) {
+			for j in int(math.floor(d.lo.y)) ..< int(math.ceil(d.hi.y)) {
+				cell := d.tile + du * i - Vec3i{0, 0, j}
+				if cell.x + cell.y + cell.z != level do continue
+				if !is_filled(cell) || is_filled(cell + n) do continue
+				f := wall_face(cell, d.dir)
+				quad := [4]Vec2{face_pt(f, {0, 0}), face_pt(f, {1, 0}), face_pt(f, {1, 1}), face_pt(f, {0, 1})}
+				p.push_clip(quad[:])
+				d.paint(wall_face(d.tile, d.dir), d.lo, d.hi)
+				p.pop_clip()
 			}
 		}
-		if best < 0 { // cycle: fall back to deepest centroid
-			for i in 0 ..< n {
-				if !used[i] && depth_key(&es[i]) > best_key {
-					best = i
-					best_key = depth_key(&es[i])
+	}
+}
+
+render_voxels :: proc() {
+	lines := make([][dynamic][2]Vec2, MAX_SUM + 1, context.temp_allocator)
+	cells := make([][dynamic]Vec3i, MAX_SUM + 1, context.temp_allocator)
+	for i in 0 ..= MAX_SUM {
+		lines[i] = make([dynamic][2]Vec2, context.temp_allocator)
+		cells[i] = make([dynamic]Vec3i, context.temp_allocator)
+	}
+
+	// Around each lattice edge: D is the viewer-most cell, A the farthest,
+	// B/C the sides. Ink iff D empty and the exposed surfaces across the edge
+	// differ: a concave crease (B and C) or exactly one of A/B/C (silhouette
+	// or convex crease). Flush continuations cancel
+	sizes := Vec3i{XY_GRID_SIZE, XY_GRID_SIZE, Z_GRID_SIZE}
+	for axis in 0 ..< 3 {
+		u, v: Vec3i
+		u[(axis + 1) % 3] = 1
+		v[(axis + 2) % 3] = 1
+		lim := sizes
+		lim[axis] -= 1
+		for x in 0 ..= lim.x {
+			for y in 0 ..= lim.y {
+				for z in 0 ..= lim.z {
+					q := Vec3i{x, y, z}
+					if is_filled(q) do continue
+					a := is_filled(q - u - v)
+					b := is_filled(q - v)
+					c := is_filled(q - u)
+					if !((b && c) || int(a) + int(b) + int(c) == 1) do continue
+					level := x + y + z - (b || c ? 1 : 2)
+					e := q
+					e[axis] += 1
+					append(&lines[level], [2]Vec2{to_screen(v3(q)), to_screen(v3(e))})
 				}
 			}
 		}
-		used[best] = true
-		out[k] = best
 	}
-	return out
-}
 
-Segment :: struct {
-	a, b: [2]int,
-	n: [2]int, // outward normal
-	cell: [2]int,
-}
-
-Chain :: struct {
-	pts: [][2]int,
-	closed: bool,
-}
-
-chain_segments :: proc(segs: []Segment) -> []Chain {
-	chains := make([dynamic]Chain, context.temp_allocator)
-	used := make([]bool, len(segs), context.temp_allocator)
-	for pass in 0 ..< 2 {
-		for si in 0 ..< len(segs) {
-			if used[si] do continue
-			if pass == 0 {
-				pred := false
-				for sj in 0 ..< len(segs) {
-					if !used[sj] && sj != si && segs[sj].b == segs[si].a {
-						pred = true
-						break
-					}
-				}
-				if pred do continue
-			}
-			run := make([dynamic][2]int, context.temp_allocator)
-			append(&run, segs[si].a)
-			curi := si
-			for {
-				used[curi] = true
-				append(&run, segs[curi].b)
-				nxt := -1
-				for sj in 0 ..< len(segs) {
-					if !used[sj] && segs[sj].a == segs[curi].b {
-						nxt = sj
-						break
-					}
-				}
-				if nxt < 0 do break
-				curi = nxt
-			}
-			closed := len(run) > 2 && run[0] == run[len(run) - 1]
-			if closed {
-				pop(&run)
-			}
-			out := make([dynamic][2]int, context.temp_allocator)
-			m := len(run)
-			for i in 0 ..< m {
-				if closed || (i > 0 && i < m - 1) {
-					prev := run[(i + m - 1) % m]
-					next := run[(i + 1) % m]
-					if run[i] - prev == next - run[i] {
-						continue
-					}
-				}
-				append(&out, run[i])
-			}
-			append(&chains, Chain{out[:], closed})
-		}
-	}
-	return chains[:]
-}
-
-emit_chains :: proc(segs: []Segment, z: f32) {
-	for ch in chain_segments(segs) {
-		pts := make([]Vec3, len(ch.pts), context.temp_allocator)
-		for gp, i in ch.pts {
-			pts[i] = {f32(gp.x), f32(gp.y), z}
-		}
-		poly3(pts, ch.closed)
-	}
-}
-
-INSET :: f32(0.035)
-
-voxel_group :: proc(k: int, labels: ^[XY_GRID_SIZE][XY_GRID_SIZE]int, id: int) {
-	segs := make([dynamic]Segment, context.temp_allocator)
 	for x in 0 ..< XY_GRID_SIZE {
 		for y in 0 ..< XY_GRID_SIZE {
-			if labels[x][y] != id do continue
-			// CCW winding
-			if !is_filled(x + 1, y, k) do append(&segs, Segment{{x + 1, y}, {x + 1, y + 1}, {1, 0}, {x, y}})
-			if !is_filled(x - 1, y, k) do append(&segs, Segment{{x, y + 1}, {x, y}, {-1, 0}, {x, y}})
-			if !is_filled(x, y + 1, k) do append(&segs, Segment{{x + 1, y + 1}, {x, y + 1}, {0, 1}, {x, y}})
-			if !is_filled(x, y - 1, k) do append(&segs, Segment{{x, y}, {x + 1, y}, {0, -1}, {x, y}})
-		}
-	}
-	if len(segs) == 0 do return
-
-	begin_group()
-	zb := f32(k)
-	zt := f32(k + 1)
-
-	top := make([dynamic]Segment, context.temp_allocator)
-	bot := make([dynamic]Segment, context.temp_allocator)
-	for s in segs {
-		facing := s.n == {1, 0} || s.n == {0, 1}
-		nc := s.cell + s.n
-		cu := is_filled(s.cell.x, s.cell.y, k + 1)
-		nu := is_filled(nc.x, nc.y, k + 1)
-		// for top edges, skip where the wall continues flush into the level above
-		if !(cu && !nu) && (!cu || facing) {
-			append(&top, s)
-		}
-		// for bottom crease, only consider viewer-facing
-		// and skip where flush with below
-		if facing {
-			cd := is_filled(s.cell.x, s.cell.y, k - 1)
-			nd := is_filled(nc.x, nc.y, k - 1)
-			if !(cd && !nd) {
-				append(&bot, s)
-			}
-		}
-	}
-	emit_chains(top[:], zt)
-
-	// handle loop holes 
-	cross_section :: proc(loops: []Chain, z: f32) {
-		poly := make([dynamic]Vec2, context.temp_allocator)
-		for ch, li in loops {
-			start := len(poly)
-			for gp in ch.pts {
-				w := Vec3{f32(gp.x), f32(gp.y), z}
-				append(&poly, to_screen(w))
-				expand_group(w)
-			}
-			append(&poly, poly[start])
-			if li > 0 {
-				append(&poly, poly[0])
-			}
-		}
-		p.push_occlude(poly[:])
-	}
-	loops := chain_segments(segs[:])
-	cross_section(loops, zt)
-
-	emit_chains(bot[:], zb)
-
-	// corner verticals: visible iff the near (+x+y) cell is empty and the
-	// other three cells around the corner form a corner, not a straight wall
-	vdone := make(map[[2]int]bool, context.temp_allocator)
-	for s in segs {
-		pts := [2][2]int{s.a, s.b}
-		for pt in pts {
-			if vdone[pt] do continue
-			vdone[pt] = true
-			if is_filled(pt.x, pt.y, k) do continue // hidden behind the near cell
-			mm := is_filled(pt.x - 1, pt.y - 1, k)
-			pm := is_filled(pt.x, pt.y - 1, k)
-			mp := is_filled(pt.x - 1, pt.y, k)
-			if !mm && !pm && !mp do continue
-			if mm && (pm != mp) do continue // wall runs straight through
-			v := Vec3{f32(pt.x), f32(pt.y), zb}
-			line3(v, v + {0, 0, 1})
-		}
-	}
-
-	for s in segs {
-		nc := s.cell + s.n
-		ti := INSET
-		if is_filled(s.cell.x, s.cell.y, k + 1) && !is_filled(nc.x, nc.y, k + 1) do ti = -INSET
-		bi := INSET
-		if is_filled(s.cell.x, s.cell.y, k - 1) && !is_filled(nc.x, nc.y, k - 1) do bi = -INSET
-		d := s.b - s.a // unit grid step along the wall
-		ea := f32(0)
-		ca := s.cell - d
-		if is_filled(ca.x, ca.y, k) && !is_filled(ca.x + s.n.x, ca.y + s.n.y, k) do ea = INSET
-		eb := f32(0)
-		cb := s.cell + d
-		if is_filled(cb.x, cb.y, k) && !is_filled(cb.x + s.n.x, cb.y + s.n.y, k) do eb = INSET
-		qa := Vec2{f32(s.a.x) - f32(d.x) * ea, f32(s.a.y) - f32(d.y) * ea}
-		qb := Vec2{f32(s.b.x) + f32(d.x) * eb, f32(s.b.y) + f32(d.y) * eb}
-		quad := [4]Vec3{
-			{qa.x, qa.y, zt - ti},
-			{qb.x, qb.y, zt - ti},
-			{qb.x, qb.y, zb + bi},
-			{qa.x, qa.y, zb + bi},
-		}
-
-		scr: [4]Vec2
-		for w, i in quad {
-			scr[i] = to_screen(w)
-		}
-		p.push_occlude(scr[:])
-	}
-	cross_section(loops, zb)
-	end_group()
-}
-
-mesh_voxels :: proc() {
-	dirs := [4][2]int{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}
-	for k in 0 ..< Z_GRID_SIZE {
-		labels: [XY_GRID_SIZE][XY_GRID_SIZE]int
-		next := 1
-		for x in 0 ..< XY_GRID_SIZE {
-			for y in 0 ..< XY_GRID_SIZE {
-				if !is_filled(x, y, k) || labels[x][y] != 0 do continue
-				stack := make([dynamic][2]int, context.temp_allocator)
-				append(&stack, [2]int{x, y})
-				labels[x][y] = next
-				for len(stack) > 0 {
-					c := pop(&stack)
-					for d in dirs {
-						nb := c + d
-						if is_filled(nb.x, nb.y, k) && labels[nb.x][nb.y] == 0 {
-							labels[nb.x][nb.y] = next
-							append(&stack, nb)
-						}
-					}
+			for z in 0 ..< Z_GRID_SIZE {
+				c := Vec3i{x, y, z}
+				if is_filled(c) && !hidden(c) {
+					append(&cells[x + y + z], c)
 				}
-				next += 1
 			}
 		}
-		for id in 1 ..< next {
-			voxel_group(k, &labels, id)
+	}
+
+	for s := MAX_SUM; s >= 0; s -= 1 {
+		for seg in lines[s] {
+			p.line(seg[0], seg[1])
+		}
+		emit_decals(s)
+		for c in cells[s] {
+			push_hexagon(c)
 		}
 	}
 }
@@ -567,19 +323,14 @@ mesh_voxels :: proc() {
 draw :: proc() {
 	win = {p.canvas.width, p.canvas.height}
 	origin = {win.x / 2, 3 * win.y / 4}
-	// origin = {win.x / 2, win.y / 4}
 	scene = {}
-	groups = make([dynamic]DrawGroup, context.temp_allocator)
+	decals = make([dynamic]Decal, context.temp_allocator)
 	frame_ogee()
 
-	// fill_voxels(0, 0, 0, 1, 12, 12)
-	// fill_voxels(0, 0, 0, 12, 1, 12)
-
-	fill_voxels(0,0,0,4,1,4)
+	fill_voxels(0, 0, 0, 5, 1, 4)
+	fill_voxels(0, 0, 0, 1, 5, 4)
 
 	//fill_voxels(2, 2, 0, 12, 12, 1) // plaza
-	// fill_voxels(12,0,0,13,1,1)
-	//fill_voxels(1, 1, 1, 2, 2, 2)
 	// fill_voxels(7, 4, 0, 9, 6, 1, false) // courtyard hole
 	// fill_voxels(2, 2, 1, 6, 6, 2) // terrace, flush with the plaza at x=2 / y=2
 	// fill_voxels(9, 9, 1, 11, 11, 6) // tower
@@ -587,19 +338,15 @@ draw :: proc() {
 	// fill_voxels(4, 8, 1, 5, 9, 3) // mushroom stem
 	// fill_voxels(3, 8, 3, 6, 10, 4) // mushroom cap, overhanging the stem
 
-	mesh_voxels()
+	append(&decals, Decal{{2, 0, 1}, .PosY, {0.1, -2}, {1.9, 1}, ogee})
 
-	// ogee(wall_face({1, 1, 1}, .PosY), {0.1, -2}, {1.9, 1})
-	//ogee(wall_face({2, 1, 1}, .PosY), {0.1, -2}, {1.9, 1})
-	ogee(wall_face({2, 1, 1}, .PosY), {0.1, -1}, {0.9, 1})
-	//ogee(wall_face({4, 1, 1}, .PosY), {0.1, -1}, {0.9, 1})
-
-	order := order_groups(groups[:])
-	for i in order {
-		p.draw_group(groups[i].group)
-	}
+	render_voxels()
 }
 
 main :: proc() {
-	p.run(600, 600, "calvinos cities", draw, loop = false)
+	p.canvas.width = 600
+	p.canvas.height = 600
+	p.canvas_reset()
+	draw()
+	p.export_svg()
 }

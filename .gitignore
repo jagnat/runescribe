@@ -7,4 +7,7 @@ hpgl/
 *.out
 *.pdb
 *.rdi
+tools/singleline_font/venv/
+tools/singleline_font/font.json
+tools/singleline_font/proof.png
 

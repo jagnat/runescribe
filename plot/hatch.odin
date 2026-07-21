@@ -7,8 +7,11 @@ import "core:slice"
 // call rect/circle/polyline alongside if you want one. Cross-hatch by hatching
 // twice at two angles.
 
-// Even-odd scanline, so concave outlines fill correctly. angle is in radians
-hatch :: proc(points: []Vec2, spacing: f32, angle := f32(0)) {
+// Even-odd scanline, so concave outlines fill correctly. angle is in radians.
+// gap > 0 breaks each line into dash-length strokes (or dots when dash is 0);
+// stagger shifts the dash pattern by that much per line so dashes don't align
+// into columns
+hatch :: proc(points: []Vec2, spacing: f32, angle := f32(0), dash := f32(0), gap := f32(0), stagger := f32(0)) {
 	if len(points) < 3 || spacing <= 0 {
 		return
 	}
@@ -24,6 +27,7 @@ hatch :: proc(points: []Vec2, spacing: f32, angle := f32(0)) {
 		ymax = max(ymax, q.y)
 	}
 	xs := make([dynamic]f32, context.temp_allocator)
+	row := 0
 	for y := ymin + spacing / 2; y < ymax; y += spacing {
 		clear(&xs)
 		for a, i in local {
@@ -35,7 +39,33 @@ hatch :: proc(points: []Vec2, spacing: f32, angle := f32(0)) {
 		}
 		slice.sort(xs[:])
 		for i := 0; i + 1 < len(xs); i += 2 {
-			line_v({co * xs[i] - si * y, si * xs[i] + co * y}, {co * xs[i + 1] - si * y, si * xs[i + 1] + co * y})
+			hatch_span(xs[i], xs[i + 1], y, co, si, dash, gap, f32(row) * stagger)
+		}
+		row += 1
+	}
+}
+
+// One horizontal span in the rotated frame, rotated back to world as it draws
+@(private = "file")
+hatch_span :: proc(x0, x1, y, co, si, dash, gap, phase: f32) {
+	world :: proc(x, y, co, si: f32) -> Vec2 {
+		return {co * x - si * y, si * x + co * y}
+	}
+	if gap <= 0 {
+		line_v(world(x0, y, co, si), world(x1, y, co, si))
+		return
+	}
+	if dash <= 0 {
+		dotted_line_v(world(x0, y, co, si), world(x1, y, co, si), gap)
+		return
+	}
+	period := dash + gap
+	// start one period early so any phase leaves no bare stretch at x0
+	for x := x0 - math.mod(phase, period) - period; x < x1; x += period {
+		a := max(x, x0)
+		b := min(x + dash, x1)
+		if b > a {
+			line_v(world(a, y, co, si), world(b, y, co, si))
 		}
 	}
 }
@@ -45,13 +75,13 @@ hatch_rect :: proc {
 	hatch_rect_v,
 }
 
-hatch_rect_v :: proc(pos, size: Vec2, spacing: f32, angle := f32(0)) {
+hatch_rect_v :: proc(pos, size: Vec2, spacing: f32, angle := f32(0), dash := f32(0), gap := f32(0), stagger := f32(0)) {
 	pts := [4]Vec2{pos, pos + {size.x, 0}, pos + size, pos + {0, size.y}}
-	hatch(pts[:], spacing, angle)
+	hatch(pts[:], spacing, angle, dash, gap, stagger)
 }
 
-hatch_rect_xy :: proc(x, y, w, h, spacing: f32, angle := f32(0)) {
-	hatch_rect_v({x, y}, {w, h}, spacing, angle)
+hatch_rect_xy :: proc(x, y, w, h, spacing: f32, angle := f32(0), dash := f32(0), gap := f32(0), stagger := f32(0)) {
+	hatch_rect_v({x, y}, {w, h}, spacing, angle, dash, gap, stagger)
 }
 
 hatch_circle :: proc {
@@ -59,10 +89,10 @@ hatch_circle :: proc {
 	hatch_circle_v,
 }
 
-hatch_circle_v :: proc(center: Vec2, r, spacing: f32, angle := f32(0)) {
-	hatch(ellipse_points(center, r, r, circle_segments(r * xform_scale())), spacing, angle)
+hatch_circle_v :: proc(center: Vec2, r, spacing: f32, angle := f32(0), dash := f32(0), gap := f32(0), stagger := f32(0)) {
+	hatch(ellipse_points(center, r, r, circle_segments(r * xform_scale())), spacing, angle, dash, gap, stagger)
 }
 
-hatch_circle_xy :: proc(x, y, r, spacing: f32, angle := f32(0)) {
-	hatch_circle_v({x, y}, r, spacing, angle)
+hatch_circle_xy :: proc(x, y, r, spacing: f32, angle := f32(0), dash := f32(0), gap := f32(0), stagger := f32(0)) {
+	hatch_circle_v({x, y}, r, spacing, angle, dash, gap, stagger)
 }

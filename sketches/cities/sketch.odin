@@ -17,7 +17,11 @@ win: Vec2
 // window types, counts
 // building cluster sizes
 // building layers
-// 
+
+person_height: f32 = 20
+floor_height: f32 = math.floor_f32(person_height * 1.85)
+door_height: f32 = math.floor_f32(person_height * 1.23)
+door_width: f32 = math.floor_f32(person_height * 0.55)
 
 RoofType :: enum {
 	Flat,
@@ -38,10 +42,26 @@ draw :: proc() {
 	win = {p.canvas.width, p.canvas.height}
 	using p;
 
-	seed_gen_0()
+	// seed_gen_0()
 
 	frame_ogee()
-	generate_building({300, 300})
+	// generate_building({300, 300})
+	p.rect(300, 300, door_width, door_height)
+	p.rect(300 + door_width * 2, 300, door_width, door_height)
+	human_for_scale({300 + door_width / 2, 300 + door_height - person_height})
+}
+
+human_for_scale :: proc(pos: Vec2) {
+	head_rad := person_height * 0.1
+	p.circle(pos.x, pos.y + head_rad, head_rad)
+	//arms
+	p.line(pos.x, pos.y + head_rad * 2, pos.x - person_height * 0.12, pos.y + person_height * 0.6);
+	p.line(pos.x, pos.y + head_rad * 2, pos.x + person_height * 0.12, pos.y + person_height * 0.6);
+	//torso
+	p.line(pos.x, pos.y + head_rad * 2, pos.x, pos.y + person_height * 0.6);
+	//legs
+	p.line(pos.x, pos.y + person_height * 0.6, pos.x - person_height * 0.12, pos.y + person_height);
+	p.line(pos.x, pos.y + person_height * 0.6, pos.x + person_height * 0.12, pos.y + person_height);
 }
 
 seed_gen_0 :: proc() {
@@ -102,6 +122,8 @@ generate_building :: proc(center: Vec2) {
 	extra_w :f32= 10
 	extra_h := slope * extra_w
 
+	p.hatch_rect(top_l, bounds, 5, dash = 6, gap = 12, stagger = 9)
+
 	switch roof_type {
 	case .Flat:
 		p.line(top_l - {extra_w, 0}, {bot_r.x, top_l.y} + {extra_w, 0})
@@ -158,7 +180,6 @@ frame_ogee :: proc() {
 
 	ya0 := y1 - h_vert
 	ya1 := y0 + h_anchor
-
 	xa0 := x0 + w_anchor
 	xa1 := x1 - w_anchor
 
@@ -176,7 +197,6 @@ frame_ogee :: proc() {
 	append_bezier(&right, {xa1, ya1}, {xa1 - comp1_x, ya1 - comp1_y},
 		{xc, y0 + control_dist}, {xc, y0})
 
-	// both halves end at the apex, so walk the right one back from below it
 	for i := len(right) - 2; i >= 0; i -= 1 {
 		append(&left, right[i])
 	}

@@ -73,11 +73,11 @@ Canvas :: struct {
 canvas: Canvas
 
 // Calls draw_proc once per frame, re-recording the whole canvas each time.
-// With loop = false it draws once and re-renders until R reseeds.
-// Keys: S exports SVG, R rerolls the seed
+// With loop = false it draws once and re-renders until R reseeds or a panel
+// param changes. Keys: S exports SVG, R rerolls the seed, Tab tweak panel
 run :: proc(width, height: int, title: string, draw_proc: proc(), loop := true) {
 	rl.SetConfigFlags({.WINDOW_HIGHDPI, .MSAA_4X_HINT})
-	rl.InitWindow(i32(width), i32(height), fmt.ctprintf("%s | S: save svg, R: reseed", title))
+	rl.InitWindow(i32(width), i32(height), fmt.ctprintf("%s | S: save svg, R: reseed, Tab: params", title))
 	defer rl.CloseWindow()
 	rl.SetTargetFPS(60)
 
@@ -85,13 +85,20 @@ run :: proc(width, height: int, title: string, draw_proc: proc(), loop := true) 
 	canvas.height = f32(height)
 	canvas.seed = u64(time.now()._nsec)
 
+	ui.params = make([dynamic]Param)
+	defer delete(ui.params)
+	ui.active = -1
+
 	needs_draw := true
 
 	for !rl.WindowShouldClose() {
 		if rl.IsKeyPressed(.R) {
 			canvas.seed += 1
 			needs_draw = true
-			rl.SetWindowTitle(fmt.ctprintf("%s | seed %d | S: save svg, R: reseed", title, canvas.seed))
+			rl.SetWindowTitle(fmt.ctprintf("%s | seed %d | S: save svg, R: reseed, Tab: params", title, canvas.seed))
+		}
+		if ui_update() {
+			needs_draw = true
 		}
 
 		if loop || needs_draw {
@@ -100,13 +107,16 @@ run :: proc(width, height: int, title: string, draw_proc: proc(), loop := true) 
 			free_all(context.temp_allocator)
 			canvas_reset()
 			rand.reset(canvas.seed) // hold still until reseeded
+			ui_mark()
 			draw_proc()
+			ui_sweep()
 			needs_draw = false
 		}
 
 		rl.BeginDrawing()
 		rl.ClearBackground(rl.WHITE)
 		render_shapes()
+		ui_render()
 		rl.EndDrawing()
 
 		if rl.IsKeyPressed(.S) {
