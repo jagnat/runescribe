@@ -75,6 +75,8 @@ COLOR_NAMES = {
     'purple': '#800080', 'brown': '#8b4513', 'magenta': '#ff00ff',
 }
 
+UNITS_PER_MM = 40.0
+
 # Plotter-unit drawing area to fit the artwork into. These are the HP 7440A
 # US/Letter hard-clip limits (~10.1in x 7.5in landscape); 40 plotter units == 1mm.
 # Verified on hardware: a box at (40,40)-(10260,7610) draws cleanly within reach.
@@ -98,6 +100,14 @@ rotate = 0
 # the command line. Incompatible with rotate != 0 (the canvas box doesn't rotate
 # with the geometry), so canvas-fit is ignored when rotating.
 fit_to_canvas = False
+
+# (width, height) in mm to fit the drawing into, centred on the page, instead of
+# scaling it up to fill the paper. Aspect is preserved, so the fitted source box
+# reaches the given size only in the dimension that binds -- give the size in the
+# drawing's own orientation. Set with --size WxH. With --canvas the fitted box is
+# the SVG canvas, so the canvas lands at a known physical size (matching a frame
+# or mount); with bounds-fit it's the ink.
+fit_size_mm = None
 
 # Maximum bytes per emitted record (including the trailing ';'). The base 7440A
 # accepts only small buffers, so keep this comfortably under 60. The streamer's
@@ -487,13 +497,16 @@ def svg_canvas_bounds(root):
     return None
 
 
-def build_transform(polylines, src_bounds=None):
+def build_transform(polylines, src_bounds=None, size_mm=None):
     """Return f(x, y) -> (ix, iy) mapping SVG coords into integer plotter units,
     scaled to fit the configured area (aspect preserved) with Y flipped.
 
     src_bounds, if given, is the (min_x, min_y, max_x, max_y) source rectangle to
     fit -- pass the SVG canvas to preserve the drawing's placement/margins instead
-    of scaling the ink's bounding box up to fill the paper."""
+    of scaling the ink's bounding box up to fill the paper.
+
+    size_mm, if given, is a (width, height) in mm to fit into instead of the whole
+    page; the result is centred on the page either way."""
     xs = [p[0] for poly in polylines for p in poly]
     ys = [p[1] for poly in polylines for p in poly]
     if not xs:
@@ -509,11 +522,25 @@ def build_transform(polylines, src_bounds=None):
 
     avail_w = (plot_x_max - plot_x_min) - 2 * margin
     avail_h = (plot_y_max - plot_y_min) - 2 * margin
+
+    if size_mm is not None:
+        want_w = size_mm[0] * UNITS_PER_MM
+        want_h = size_mm[1] * UNITS_PER_MM
+        if want_w > avail_w or want_h > avail_h:
+            raise ValueError(
+                '--size {:g}x{:g}mm does not fit the drawing area ({:g}x{:g}mm '
+                'after margins).'.format(size_mm[0], size_mm[1],
+                                         avail_w / UNITS_PER_MM, avail_h / UNITS_PER_MM))
+        avail_w, avail_h = want_w, want_h
+
     scale = min(avail_w / src_w, avail_h / src_h)
 
-    # Center the artwork within the available area.
-    off_x = plot_x_min + margin + (avail_w - src_w * scale) / 2.0
-    off_y = plot_y_min + margin + (avail_h - src_h * scale) / 2.0
+    # Center the artwork on the page.
+    off_x = (plot_x_min + plot_x_max) / 2.0 - src_w * scale / 2.0
+    off_y = (plot_y_min + plot_y_max) / 2.0 - src_h * scale / 2.0
+
+    print('Fitted box: {:.1f} x {:.1f} mm.'.format(
+        src_w * scale / UNITS_PER_MM, src_h * scale / UNITS_PER_MM))
 
     def transform(x, y):
         ix = off_x + (x - min_x) * scale
@@ -661,6 +688,11 @@ Options:
                              preserving the drawing's placement and margins.
     --bounds, --fit-bounds   Fit the tight bounding box of the ink to the paper
                              (the default).
+    --size WxH               Fit into a WxH mm box centred on the page instead of
+                             filling the paper (e.g. --size 120x172 with --canvas
+                             puts the SVG canvas at exactly that size). Aspect is
+                             preserved, so give W and H in the drawing's own
+                             orientation.
     -h, --help               Show this help and exit.
 
 If vpype is on PATH it runs first (linemerge + linesort) to cut pen-up travel,
@@ -675,6 +707,14 @@ def print_help():
     print(USAGE)
 
 
+def parse_size(val):
+    """Parse a '120x172' / '120,172' / '120x172mm' size into (width, height) mm."""
+    nums = re.findall(r'[0-9]*\.?[0-9]+', val)
+    if len(nums) != 2:
+        raise ValueError('--size wants WxH in mm, e.g. --size 120x172')
+    return float(nums[0]), float(nums[1])
+
+
 def main():
     args = sys.argv[1:]
 
@@ -683,6 +723,7 @@ def main():
         return
 
     canvas = fit_to_canvas
+    size_mm = fit_size_mm
     force_pen = None            # --pen N: ignore styles, draw everything on N
     cli_pens = None             # --pens N,N,...: assign by group order
     cli_map = {}                # --map STYLE=N: assign by style key or colour
@@ -696,6 +737,11 @@ def main():
             canvas = True
         elif a in ('--bounds', '--fit-bounds'):
             canvas = False
+        elif a == '--size':
+            i += 1
+            size_mm = parse_size(args[i])
+        elif a.startswith('--size='):
+            size_mm = parse_size(a.split('=', 1)[1])
         elif a in ('-y', '--yes'):
             assume_yes = True
         elif a == '--no-optimize':
@@ -767,7 +813,7 @@ def main():
                       'fitting ink bounds instead.')
             else:
                 print('Fitting to SVG canvas {}.'.format(src_bounds))
-    transform = build_transform(all_polylines, src_bounds)
+    transform = build_transform(all_polylines, src_bounds, size_mm)
     records = list(emit_records(pen_passes, transform))
 
     # Sanity: no record may exceed the buffer budget.
